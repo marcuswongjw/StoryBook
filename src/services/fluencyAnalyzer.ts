@@ -1,46 +1,56 @@
-import { SentenceData, VocabularyWord, ReadingStumble } from '../types';
+import type { ReadingStumble, SentenceData, VocabularyWord } from '../types';
 
 export function calculateLevenshteinDistance(a: string, b: string): number {
-  const an = a ? a.length : 0;
-  const bn = b ? b.length : 0;
-  if (an === 0) return bn;
-  if (bn === 0) return an;
+  const sourceLength = a?.length ?? 0;
+  const targetLength = b?.length ?? 0;
+  if (sourceLength === 0) return targetLength;
+  if (targetLength === 0) return sourceLength;
 
-  const matrix: number[][] = [];
-  for (let i = 0; i <= bn; ++i) matrix[i] = [i];
-  for (let i = 0; i <= an; ++i) matrix[0][i] = i;
+  const matrix: number[][] = Array.from(
+    { length: targetLength + 1 },
+    (_, row) => [row],
+  );
+  matrix[0] = Array.from({ length: sourceLength + 1 }, (_, column) => column);
 
-  for (let i = 1; i <= bn; ++i) {
-    for (let j = 1; j <= an; ++j) {
-      if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
+  for (let row = 1; row <= targetLength; row += 1) {
+    for (let column = 1; column <= sourceLength; column += 1) {
+      if (b.charAt(row - 1) === a.charAt(column - 1)) {
+        matrix[row][column] = matrix[row - 1][column - 1];
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1, // substitution
-          Math.min(
-            matrix[i][j - 1] + 1, // insertion
-            matrix[i - 1][j] + 1 // deletion
-          )
+        matrix[row][column] = Math.min(
+          matrix[row - 1][column - 1] + 1,
+          matrix[row][column - 1] + 1,
+          matrix[row - 1][column] + 1,
         );
       }
     }
   }
-  return matrix[bn][an];
+
+  return matrix[targetLength][sourceLength];
+}
+
+function normaliseWord(word: string): string {
+  return word.toLowerCase().replace(/[^\w-]/g, '');
 }
 
 export function areWordsSimilar(spoken: string, target: string): boolean {
-  const s = spoken.toLowerCase().replace(/[^\w]/g, '');
-  const t = target.toLowerCase().replace(/[^\w]/g, '');
-  if (!s || !t) return false;
-  if (s === t) return true;
-  // Substring match
-  if (s.includes(t) || t.includes(s)) return true;
+  const candidate = normaliseWord(spoken);
+  const expected = normaliseWord(target);
+  if (!candidate || !expected) return false;
+  if (candidate === expected) return true;
 
-  const dist = calculateLevenshteinDistance(s, t);
-  const maxLen = Math.max(s.length, t.length);
-  // Allow up to 25% edit distance for long words, or 1 character for short words
-  const threshold = maxLen <= 4 ? 1 : Math.floor(maxLen * 0.3);
-  return dist <= threshold;
+  // Permit only harmless grammatical endings, never broad substring matching.
+  if (expected.length > 3 && (candidate === `${expected}s` || candidate === `${expected}ed`)) {
+    return true;
+  }
+
+  // Short words need an exact match. A one-character difference can change the word entirely.
+  if (Math.min(candidate.length, expected.length) <= 4) return false;
+
+  const distance = calculateLevenshteinDistance(candidate, expected);
+  const maximumLength = Math.max(candidate.length, expected.length);
+  const threshold = maximumLength <= 5 ? 1 : Math.max(1, Math.floor(maximumLength * 0.2));
+  return distance <= threshold;
 }
 
 export interface FluencyMatchResult {
@@ -52,163 +62,235 @@ export interface FluencyMatchResult {
   activeVocabData?: VocabularyWord;
 }
 
+type StumbleCallback = (vocab: VocabularyWord, stumble: ReadingStumble) => void;
+type MismatchCallback = (stumble: ReadingStumble) => void;
+
 export class SentenceFluencyTracker {
-  private sentence: SentenceData;
-  private words: string[] = [];
-  private cleanedWords: string[] = [];
+  private readonly sentence: SentenceData;
+  private readonly words: string[];
+  private readonly cleanedWords: string[];
   private currentIndex = 0;
-  private wordStartTime: number = Date.now();
-  private hesitationTimeoutId?: any;
-  private onHesitationCallback?: (vocab: VocabularyWord, stumble: ReadingStumble) => void;
-  private hesitationThresholdMs = 3800; // 3.8s pause on challenging word
+  private wordStartTime = Date.now();
+  private hesitationTimeoutId?: ReturnType<typeof setTimeout>;
+  private onHesitationCallback?: StumbleCallback;
+  private onMismatchCallback?: MismatchCallback;
+  private readonly hesitationThresholdMs: number;
+  private reportedMismatchKeys = new Set<string>();
 
   constructor(sentence: SentenceData, hesitationThresholdSeconds = 3.8) {
     this.sentence = sentence;
     this.hesitationThresholdMs = hesitationThresholdSeconds * 1000;
     this.words = sentence.text.split(/\s+/).filter(Boolean);
-    this.cleanedWords = this.words.map((w) => w.toLowerCase().replace(/[^\w-]/g, ''));
+    this.cleanedWords = this.words.map(normaliseWord);
     this.reset();
   }
 
-  public reset() {
+  public reset(): void {
     this.currentIndex = 0;
     this.wordStartTime = Date.now();
+    this.reportedMismatchKeys.clear();
     this.clearHesitationTimer();
     this.scheduleHesitationWatchdog();
   }
 
-  public setHesitationCallback(
-    callback: (vocab: VocabularyWord, stumble: ReadingStumble) => void
-  ) {
+  public setHesitationCallback(callback: StumbleCallback): void {
     this.onHesitationCallback = callback;
   }
 
-  private clearHesitationTimer() {
+  public setMismatchCallback(callback: MismatchCallback): void {
+    this.onMismatchCallback = callback;
+  }
+
+  private clearHesitationTimer(): void {
     if (this.hesitationTimeoutId) {
       clearTimeout(this.hesitationTimeoutId);
       this.hesitationTimeoutId = undefined;
     }
   }
 
-  private scheduleHesitationWatchdog() {
-    this.clearHesitationTimer();
-    const currentClean = this.cleanedWords[this.currentIndex];
-    if (!currentClean) return;
-
-    // Check if current word is a target vocabulary term
-    const matchedVocab = this.sentence.vocabularyWords.find(
-      (v) => v.word.toLowerCase() === currentClean || currentClean.includes(v.word.toLowerCase())
-    );
-
-    if (matchedVocab && this.onHesitationCallback) {
-      this.hesitationTimeoutId = setTimeout(() => {
-        const stumble: ReadingStumble = {
-          id: 'stumble-' + Date.now(),
-          timestamp: Date.now(),
-          sentenceId: this.sentence.id,
-          sentenceText: this.sentence.text,
-          targetWord: matchedVocab.word,
-          stumbleType: 'hesitation',
-          durationSeconds: Math.round((Date.now() - this.wordStartTime) / 100) / 10,
-          resolvedWithReRead: false,
-          notes: `Hesitated > ${this.hesitationThresholdMs / 1000}s on advanced word: "${matchedVocab.word}"`,
-        };
-        this.onHesitationCallback?.(matchedVocab, stumble);
-      }, this.hesitationThresholdMs);
-    }
+  private vocabularyFor(targetWord: string): VocabularyWord {
+    return this.sentence.vocabularyWords.find((vocabulary) => (
+      normaliseWord(vocabulary.word) === targetWord
+      || targetWord.includes(normaliseWord(vocabulary.word))
+    )) ?? {
+      word: targetWord || 'word',
+      phonetic: '',
+      syllableBreakdown: targetWord || 'word',
+      partOfSpeech: 'word',
+      definition: 'A word from the active reading sentence.',
+      tacticalAnalogy: 'Pause, check the word, and try the sentence again with steady pacing.',
+      sampleUsage: this.sentence.text,
+    };
   }
 
-  public processSpokenWords(spokenWords: string[]): FluencyMatchResult {
-    if (spokenWords.length === 0) {
-      return this.getStatus();
-    }
+  private reportMismatch(
+    expectedWord: string,
+    spokenAttempt: string,
+    stumbleType: 'mispronunciation' | 'syntax_stall',
+    note: string,
+  ): void {
+    const key = `${this.currentIndex}:${normaliseWord(spokenAttempt)}:${stumbleType}`;
+    if (this.reportedMismatchKeys.has(key)) return;
+    this.reportedMismatchKeys.add(key);
 
-    // Try to advance index through spoken words
-    for (const spoken of spokenWords) {
-      const target = this.cleanedWords[this.currentIndex];
-      if (!target) break;
-
-      if (areWordsSimilar(spoken, target)) {
-        this.currentIndex++;
-        this.wordStartTime = Date.now();
-        this.scheduleHesitationWatchdog();
-      } else {
-        // Check if next word was spoken instead (skipping a small word)
-        const nextTarget = this.cleanedWords[this.currentIndex + 1];
-        if (nextTarget && areWordsSimilar(spoken, nextTarget)) {
-          this.currentIndex += 2;
-          this.wordStartTime = Date.now();
-          this.scheduleHesitationWatchdog();
-        }
-      }
-    }
-
-    if (this.currentIndex >= this.words.length) {
-      this.clearHesitationTimer();
-    }
-
-    return this.getStatus();
-  }
-
-  public advanceManualWord() {
-    if (this.currentIndex < this.words.length) {
-      this.currentIndex++;
-      this.wordStartTime = Date.now();
-      this.scheduleHesitationWatchdog();
-    }
-    if (this.currentIndex >= this.words.length) {
-      this.clearHesitationTimer();
-    }
-    return this.getStatus();
-  }
-
-  public forceTriggerStumble(vocabWord?: VocabularyWord) {
-    this.clearHesitationTimer();
-    const vocab =
-      vocabWord ||
-      this.sentence.vocabularyWords[0] || {
-        word: this.cleanedWords[this.currentIndex] || 'word',
-        phonetic: '',
-        syllableBreakdown: this.cleanedWords[this.currentIndex] || 'word',
-        partOfSpeech: 'term',
-        definition: 'Key passage vocabulary.',
-        tacticalAnalogy: 'Break down the syllable rhythm and read with smooth confidence!',
-        sampleUsage: this.sentence.text,
-      };
-
-    const stumble: ReadingStumble = {
-      id: 'stumble-' + Date.now(),
+    this.onMismatchCallback?.({
+      id: `stumble-${Date.now()}-${this.currentIndex}`,
       timestamp: Date.now(),
       sentenceId: this.sentence.id,
       sentenceText: this.sentence.text,
-      targetWord: vocab.word,
-      stumbleType: 'mispronunciation',
-      durationSeconds: Math.round((Date.now() - this.wordStartTime) / 100) / 10,
+      targetWord: expectedWord,
+      spokenAttempt,
+      stumbleType,
+      durationSeconds: Math.max(0.1, Math.round((Date.now() - this.wordStartTime) / 100) / 10),
       resolvedWithReRead: false,
-      notes: `Mispronunciation / phoneme stumble on "${vocab.word}"`,
+      notes: note,
+    });
+  }
+
+  private scheduleHesitationWatchdog(): void {
+    this.clearHesitationTimer();
+    const currentWord = this.cleanedWords[this.currentIndex];
+    if (!currentWord) return;
+
+    const vocabulary = this.sentence.vocabularyWords.find((word) => (
+      normaliseWord(word.word) === currentWord
+      || currentWord.includes(normaliseWord(word.word))
+    ));
+
+    if (!vocabulary || !this.onHesitationCallback) return;
+
+    this.hesitationTimeoutId = setTimeout(() => {
+      const stumble: ReadingStumble = {
+        id: `stumble-${Date.now()}-${this.currentIndex}`,
+        timestamp: Date.now(),
+        sentenceId: this.sentence.id,
+        sentenceText: this.sentence.text,
+        targetWord: vocabulary.word,
+        stumbleType: 'hesitation',
+        durationSeconds: Math.round((Date.now() - this.wordStartTime) / 100) / 10,
+        resolvedWithReRead: false,
+        notes: `Hesitated for more than ${this.hesitationThresholdMs / 1000}s on "${vocabulary.word}".`,
+      };
+      this.onHesitationCallback?.(vocabulary, stumble);
+    }, this.hesitationThresholdMs);
+  }
+
+  public processSpokenWords(spokenWords: string[]): FluencyMatchResult {
+    if (spokenWords.length === 0 || this.currentIndex >= this.words.length) {
+      return this.getStatus();
+    }
+
+    for (const spokenWord of spokenWords) {
+      const expectedWord = this.cleanedWords[this.currentIndex];
+      if (!expectedWord) break;
+
+      if (areWordsSimilar(spokenWord, expectedWord)) {
+        this.currentIndex += 1;
+        this.wordStartTime = Date.now();
+        this.scheduleHesitationWatchdog();
+        continue;
+      }
+
+      const nextExpectedWord = this.cleanedWords[this.currentIndex + 1];
+      if (nextExpectedWord && areWordsSimilar(spokenWord, nextExpectedWord)) {
+        this.reportMismatch(
+          expectedWord,
+          '[skipped]',
+          'syntax_stall',
+          `Skipped expected word "${this.words[this.currentIndex]}" before continuing.`,
+        );
+        this.currentIndex += 2;
+        this.wordStartTime = Date.now();
+        this.scheduleHesitationWatchdog();
+        continue;
+      }
+
+      this.reportMismatch(
+        expectedWord,
+        spokenWord,
+        'mispronunciation',
+        `Recognised "${spokenWord}" while expecting "${this.words[this.currentIndex]}".`,
+      );
+    }
+
+    if (this.currentIndex >= this.words.length) {
+      this.clearHesitationTimer();
+    }
+
+    return this.getStatus();
+  }
+
+  public advanceManualWord(): FluencyMatchResult {
+    if (this.currentIndex < this.words.length) {
+      this.reportMismatch(
+        this.cleanedWords[this.currentIndex],
+        '[manual advance]',
+        'syntax_stall',
+        `Advanced past "${this.words[this.currentIndex]}" without a recognised reading attempt.`,
+      );
+      this.currentIndex += 1;
+      this.wordStartTime = Date.now();
+      this.scheduleHesitationWatchdog();
+    }
+
+    if (this.currentIndex >= this.words.length) {
+      this.clearHesitationTimer();
+    }
+
+    return this.getStatus();
+  }
+
+  public markRemainingWordsAsSkipped(): FluencyMatchResult {
+    while (this.currentIndex < this.words.length) {
+      this.reportMismatch(
+        this.cleanedWords[this.currentIndex],
+        '[manual sentence advance]',
+        'syntax_stall',
+        `Advanced past \"${this.words[this.currentIndex]}\" without a recognised reading attempt.`,
+      );
+      this.currentIndex += 1;
+    }
+    this.clearHesitationTimer();
+    return this.getStatus();
+  }
+
+  public forceTriggerStumble(vocabularyWord?: VocabularyWord): ReadingStumble {
+    this.clearHesitationTimer();
+    const vocabulary = vocabularyWord ?? this.vocabularyFor(this.cleanedWords[this.currentIndex] || 'word');
+    const stumble: ReadingStumble = {
+      id: `stumble-${Date.now()}-${this.currentIndex}`,
+      timestamp: Date.now(),
+      sentenceId: this.sentence.id,
+      sentenceText: this.sentence.text,
+      targetWord: vocabulary.word,
+      stumbleType: 'mispronunciation',
+      durationSeconds: Math.max(0.1, Math.round((Date.now() - this.wordStartTime) / 100) / 10),
+      resolvedWithReRead: false,
+      notes: `Manual pronunciation check for "${vocabulary.word}".`,
     };
 
-    this.onHesitationCallback?.(vocab, stumble);
+    this.onHesitationCallback?.(vocabulary, stumble);
     return stumble;
   }
 
   public getStatus(): FluencyMatchResult {
-    const currentClean = this.cleanedWords[this.currentIndex] || '';
-    const matchedVocab = this.sentence.vocabularyWords.find(
-      (v) => v.word.toLowerCase() === currentClean || currentClean.includes(v.word.toLowerCase())
-    );
+    const currentWord = this.cleanedWords[this.currentIndex] || '';
+    const vocabulary = this.sentence.vocabularyWords.find((word) => (
+      normaliseWord(word.word) === currentWord
+      || currentWord.includes(normaliseWord(word.word))
+    ));
 
     return {
       currentWordIndex: this.currentIndex,
       matchedWordsCount: this.currentIndex,
       isSentenceComplete: this.currentIndex >= this.words.length,
       activeWord: this.words[this.currentIndex] || '',
-      isTargetVocab: !!matchedVocab,
-      activeVocabData: matchedVocab,
+      isTargetVocab: Boolean(vocabulary),
+      activeVocabData: vocabulary,
     };
   }
 
-  public destroy() {
+  public destroy(): void {
     this.clearHesitationTimer();
   }
 }
