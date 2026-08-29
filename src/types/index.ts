@@ -1,9 +1,9 @@
-export type AdventureCategory = 'sailing' | 'mountaineering' | 'oceanic' | 'polar' | 'custom';
+export type AdventureCategory = 'singapore' | 'sailing' | 'mountaineering' | 'oceanic' | 'polar' | 'custom';
 
 export interface VocabularyWord {
   word: string;
   phonetic: string;
-  syllableBreakdown: string; // e.g. "GUN-wull" or "tem-PES-choo-us"
+  syllableBreakdown: string; // e.g. "GUN-wull" or "mon-SOON"
   partOfSpeech: string;
   definition: string;
   tacticalAnalogy: string; // Vivid, real-world sailing / extreme sport analogy
@@ -34,7 +34,7 @@ export interface Passage {
   title: string;
   subtitle: string;
   category: AdventureCategory;
-  lexileLevel: string; // e.g., "880L (Grade 6-7)"
+  lexileLevel: string; // e.g., "780L (Grade 6)"
   estimatedReadingTimeMinutes: number;
   missionBrief: string;
   coverGradient: string;
@@ -90,12 +90,12 @@ export interface SessionTelemetry {
 }
 
 export interface TutorSettings {
-  voiceSpeed: number; // 0.8 to 1.2
+  voiceSpeed: number;
   voicePitch: number;
-  soundEffectsVolume: number; // 0 to 1
-  ambientVolume: number; // 0 to 1
+  soundEffectsVolume: number;
+  ambientVolume: number;
   ambientSound: 'ocean' | 'mountain' | 'polar' | 'none';
   sessionTargetMinutes: number;
   theme: 'nautical' | 'amber' | 'arctic';
-  hesitationThresholdSeconds: number; // default 3.5s
+  hesitationThresholdSeconds: number; // default 4.0s for Grade 6
 }

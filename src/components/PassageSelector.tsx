@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Passage, AdventureCategory } from '../types';
-import { Compass, Ship, Mountain, Waves, Snowflake, Sparkles, Clock, Target, Play } from 'lucide-react';
+import { Compass, Ship, Mountain, Sparkles, Clock, Target, Play, MapPin } from 'lucide-react';
 
 interface PassageSelectorProps {
   passages: Passage[];
@@ -17,10 +17,9 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
 
   const categories: Array<{ id: AdventureCategory | 'all'; label: string; icon: any }> = [
     { id: 'all', label: 'All Expeditions', icon: Compass },
+    { id: 'singapore', label: '🇸🇬 Singapore Stories', icon: MapPin },
     { id: 'sailing', label: 'Offshore Sailing', icon: Ship },
     { id: 'mountaineering', label: 'Alpine Peaks', icon: Mountain },
-    { id: 'oceanic', label: 'Wild Whitewater', icon: Waves },
-    { id: 'polar', label: 'Polar Survival', icon: Snowflake },
   ];
 
   const filteredPassages = passages.filter((p) =>
@@ -29,6 +28,8 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
 
   const getCategoryBadgeColor = (cat: AdventureCategory) => {
     switch (cat) {
+      case 'singapore':
+        return 'bg-rose-950/80 text-rose-300 border-rose-500/40';
       case 'sailing':
         return 'bg-cyan-950/80 text-cyan-300 border-cyan-500/30';
       case 'mountaineering':
@@ -50,18 +51,18 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
         <div className="relative z-10 max-w-3xl space-y-4">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-compass-teal/20 border border-compass-teal/40 text-compass-glow text-xs font-semibold uppercase tracking-wider">
             <Compass className="w-3.5 h-3.5 animate-spin-slow" />
-            Mikaela’s Tactical Reading Command
+            Mikaela’s Grade 6 Tactical Reading Tutor
           </div>
 
           <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight font-sans leading-tight">
-            Read Aloud. Master High-Stakes Vocab. <br />
+            Read Aloud. Conquer Tough Vocab. <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-compass-teal via-cyan-300 to-brass-300">
               Debrief Like a Co-Skipper.
             </span>
           </h2>
 
           <p className="text-slate-300 text-sm sm:text-base leading-relaxed max-w-2xl">
-            Choose an expedition passage below. Read aloud while the voice tutor listens. If you stumble on a tricky nautical term or advanced phrase, we’ll unpack it in real-world context and re-read smoothly. No worksheets—ever.
+            Exciting high-stakes sailing, sports, and Singapore adventure stories tailored for Grade 6 readers. Read aloud while the AI listens in real time. Stumble on a word? We’ll unpack it with vivid analogies and guide you to re-read smoothly. No worksheets—ever.
           </p>
 
           {/* Quick Stats Banner */}
@@ -74,10 +75,10 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
               </div>
             </div>
             <div className="bg-compass-dark/70 border border-compass-slate/40 rounded-xl p-3">
-              <div className="text-xs text-slate-400">Lexile Range</div>
+              <div className="text-xs text-slate-400">Target Lexile</div>
               <div className="text-lg font-bold text-white flex items-center gap-1.5 mt-0.5">
                 <Target className="w-4 h-4 text-compass-teal" />
-                880L – 960L
+                750L – 820L (Grade 6)
               </div>
             </div>
             <div className="bg-compass-dark/70 border border-compass-slate/40 rounded-xl p-3 col-span-2 sm:col-span-1">
@@ -119,7 +120,7 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
           className="flex items-center gap-2 px-4 py-2 rounded-xl bg-compass-slate/30 hover:bg-compass-slate/50 text-slate-200 border border-compass-slate/50 text-xs sm:text-sm font-medium transition-all"
         >
           <Sparkles className="w-4 h-4 text-brass-400" />
-          <span>Create Custom Passage</span>
+          <span>Create Custom Story</span>
         </button>
       </div>
 
@@ -146,7 +147,7 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
                         passage.category
                       )}`}
                     >
-                      {passage.category}
+                      {passage.category === 'singapore' ? '🇸🇬 Singapore' : passage.category}
                     </span>
                     <span className="text-xs text-slate-400 font-mono flex items-center gap-1">
                       <Clock className="w-3 h-3 text-brass-400" />
@@ -169,8 +170,8 @@ export const PassageSelector: React.FC<PassageSelectorProps> = ({
                 {/* Vocabulary Tags Preview */}
                 <div className="space-y-2 pt-2 border-t border-compass-slate/30">
                   <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>Key Tactical Vocabulary ({allVocab.length})</span>
-                    <span className="font-mono text-slate-500">{passage.lexileLevel}</span>
+                    <span>Target Vocabulary ({allVocab.length})</span>
+                    <span className="font-mono text-emerald-400 font-semibold">{passage.lexileLevel}</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {allVocab.slice(0, 5).map((v, i) => (
