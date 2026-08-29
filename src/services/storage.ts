@@ -1,9 +1,10 @@
-import { SessionTelemetry, Passage, TutorSettings, ReadingStumble, DebriefTurn } from '../types';
+import { DebriefTurn, Passage, ReadingStumble, SessionTelemetry, TutorSettings } from '../types';
 import { INITIAL_PASSAGES } from '../data/passages';
 
 const SESSIONS_KEY = 'storybook_sessions_v1';
 const PASSAGES_KEY = 'storybook_custom_passages_v1';
 const SETTINGS_KEY = 'storybook_settings_v1';
+const TELEMETRY_API_URL = 'https://storyapi.marcusw.xyz/api/sessions';
 
 export const DEFAULT_SETTINGS: TutorSettings = {
   voiceSpeed: 1.0,
@@ -21,31 +22,77 @@ export function loadSessions(): SessionTelemetry[] {
     const raw = localStorage.getItem(SESSIONS_KEY);
     if (!raw) return [];
     const parsed: SessionTelemetry[] = JSON.parse(raw);
-    return parsed.sort((a, b) => b.timestamp - a.timestamp);
-  } catch (e) {
-    console.error('Failed to load sessions from storage:', e);
+    return parsed.sort((first, second) => second.timestamp - first.timestamp);
+  } catch (error) {
+    console.error('Failed to load sessions from local storage:', error);
     return [];
+  }
+}
+
+function saveSessionsLocally(sessions: SessionTelemetry[]): void {
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+async function requestTelemetry(path = '', init?: RequestInit): Promise<Response> {
+  const response = await fetch(`${TELEMETRY_API_URL}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Telemetry service returned ${response.status}`);
+  }
+
+  return response;
+}
+
+async function syncSessionToDashboard(session: SessionTelemetry): Promise<void> {
+  try {
+    await requestTelemetry('', {
+      method: 'PUT',
+      body: JSON.stringify(session),
+    });
+  } catch (error) {
+    // Local storage keeps the reader usable during a temporary network outage.
+    console.warn('Unable to sync telemetry to the parent dashboard:', error);
+  }
+}
+
+export async function loadRemoteSessions(): Promise<SessionTelemetry[]> {
+  try {
+    const response = await requestTelemetry();
+    const sessions = (await response.json()) as SessionTelemetry[];
+    const sortedSessions = sessions.sort((first, second) => second.timestamp - first.timestamp);
+    saveSessionsLocally(sortedSessions);
+    return sortedSessions;
+  } catch (error) {
+    console.warn('Unable to load remote telemetry; using this device’s cached sessions:', error);
+    return loadSessions();
   }
 }
 
 export function saveSession(session: SessionTelemetry): void {
   try {
     const existing = loadSessions();
-    const filtered = existing.filter((s) => s.sessionId !== session.sessionId);
-    const updated = [session, ...filtered];
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Failed to save session:', e);
+    const updated = [session, ...existing.filter((stored) => stored.sessionId !== session.sessionId)];
+    saveSessionsLocally(updated);
+    void syncSessionToDashboard(session);
+  } catch (error) {
+    console.error('Failed to save session:', error);
   }
 }
 
 export function deleteSession(sessionId: string): void {
   try {
-    const existing = loadSessions();
-    const updated = existing.filter((s) => s.sessionId !== sessionId);
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Failed to delete session:', e);
+    saveSessionsLocally(loadSessions().filter((session) => session.sessionId !== sessionId));
+    void requestTelemetry(`/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).catch((error) => {
+      console.warn('Unable to delete telemetry from the parent dashboard:', error);
+    });
+  } catch (error) {
+    console.error('Failed to delete session:', error);
   }
 }
 
@@ -56,7 +103,7 @@ export function updateOrAddTelemetrySession(
   wordsRead: number,
   stumbles: ReadingStumble[],
   debriefTurns: DebriefTurn[] = [],
-  isCompleted = false
+  isCompleted = false,
 ): SessionTelemetry {
   const minutes = Math.max(0.1, durationSeconds / 60);
   const effectiveWpm = Math.round(wordsRead / minutes);
@@ -64,15 +111,15 @@ export function updateOrAddTelemetrySession(
   const smoothnessScore = Math.max(60, 100 - stumblePenalty);
 
   const vocabBottlenecks = stumbles
-    .filter((s) => s.targetWord)
-    .map((s) => ({
-      word: s.targetWord!,
+    .filter((stumble) => stumble.targetWord)
+    .map((stumble) => ({
+      word: stumble.targetWord!,
       count: 1,
-      sentence: s.sentenceText,
+      sentence: stumble.sentenceText,
     }));
 
   const syntaxNotes = stumbles.length > 0
-    ? stumbles.map((s) => `Decoded phrase hurdle: "${s.sentenceText.slice(0, 48)}..."`)
+    ? stumbles.map((stumble) => `Decoded phrase hurdle: "${stumble.sentenceText.slice(0, 48)}..."`)
     : ['Navigated nautical transitions and compound sentences with smooth flow.'];
 
   const session: SessionTelemetry = {
@@ -92,7 +139,7 @@ export function updateOrAddTelemetrySession(
       bottleneckVocab: vocabBottlenecks,
       syntaxNotes,
       dinnerTablePrompt: `Ask Mikaela: "What was the most challenging tactical decision in '${passage.title}' and how did the skipper handle it?"`,
-      tacticalTakeaway: `Reinforce vocabulary like "${vocabBottlenecks.map((v) => v.word).join(', ') || 'nautical flow'}" during casual conversation.`,
+      tacticalTakeaway: `Reinforce vocabulary like "${vocabBottlenecks.map((vocabulary) => vocabulary.word).join(', ') || 'nautical flow'}" during casual conversation.`,
     },
   };
 
@@ -105,8 +152,8 @@ export function loadPassages(): Passage[] {
     const raw = localStorage.getItem(PASSAGES_KEY);
     const customPassages: Passage[] = raw ? JSON.parse(raw) : [];
     return [...INITIAL_PASSAGES, ...customPassages];
-  } catch (e) {
-    console.error('Failed to load passages:', e);
+  } catch (error) {
+    console.error('Failed to load custom passages:', error);
     return INITIAL_PASSAGES;
   }
 }
@@ -115,10 +162,13 @@ export function saveCustomPassage(passage: Passage): void {
   try {
     const raw = localStorage.getItem(PASSAGES_KEY);
     const customPassages: Passage[] = raw ? JSON.parse(raw) : [];
-    const updated = [passage, ...customPassages.filter((p) => p.id !== passage.id)];
-    localStorage.setItem(PASSAGES_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Failed to save custom passage:', e);
+    saveSessionsLocally(loadSessions());
+    localStorage.setItem(
+      PASSAGES_KEY,
+      JSON.stringify([passage, ...customPassages.filter((stored) => stored.id !== passage.id)]),
+    );
+  } catch (error) {
+    console.error('Failed to save custom passage:', error);
   }
 }
 
@@ -127,7 +177,8 @@ export function loadSettings(): TutorSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch (e) {
+  } catch (error) {
+    console.warn('Failed to load tutor settings:', error);
     return DEFAULT_SETTINGS;
   }
 }
@@ -135,13 +186,13 @@ export function loadSettings(): TutorSettings {
 export function saveSettings(settings: TutorSettings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch (e) {
-    console.error('Failed to save settings:', e);
+  } catch (error) {
+    console.error('Failed to save tutor settings:', error);
   }
 }
 
 export function generateParentMarkdownReport(session: SessionTelemetry): string {
-  const dateStr = new Date(session.timestamp).toLocaleDateString('en-US', {
+  const date = new Date(session.timestamp).toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
@@ -149,51 +200,43 @@ export function generateParentMarkdownReport(session: SessionTelemetry): string 
     hour: '2-digit',
     minute: '2-digit',
   });
+  const durationMinutes = Math.round((session.durationSeconds / 60) * 10) / 10;
 
-  const durationMin = Math.round((session.durationSeconds / 60) * 10) / 10;
+  let markdown = `# Mikaela's Tactical Reading Diagnostic Report\n\n`;
+  markdown += `**Session Date:** ${date}\n`;
+  markdown += `**Passage Title:** ${session.passageTitle} (${session.passageCategory.toUpperCase()})\n`;
+  markdown += `**Status:** ${session.status === 'completed' ? 'Mission Completed' : 'Session Logged'} | **Session Duration:** ${durationMinutes} min | **Words Read:** ${session.wordsRead} | **Effective WPM:** ${session.effectiveWpm} | **Fluency Score:** ${session.smoothnessScore}%\n\n`;
 
-  let md = `# Mikaela's Tactical Reading Diagnostic Report\n\n`;
-  md += `**Session Date:** ${dateStr}\n`;
-  md += `**Passage Title:** ${session.passageTitle} (${session.passageCategory.toUpperCase()})\n`;
-  md += `**Status:** ${session.status === 'completed' ? 'Mission Completed' : 'Session Logged'} | **Session Duration:** ${durationMin} min | **Words Read:** ${session.wordsRead} | **Effective WPM:** ${session.effectiveWpm} | **Fluency Score:** ${session.smoothnessScore}%\n\n`;
-
-  md += `## 1. Vocabulary Bottlenecks & Interventions\n`;
+  markdown += `## 1. Vocabulary Bottlenecks & Interventions\n`;
   if (session.stumbles.length === 0) {
-    md += `*Flawless delivery! No significant vocabulary hesitations or pronunciation bottlenecks recorded.*\n\n`;
+    markdown += `*Flawless delivery! No significant vocabulary hesitations or pronunciation bottlenecks recorded.*\n\n`;
   } else {
-    session.stumbles.forEach((stumble, idx) => {
-      md += `### ${idx + 1}. Word: **${stumble.targetWord || 'Sentence Stumble'}**\n`;
-      md += `- **Issue Type:** ${stumble.stumbleType.replace('_', ' ').toUpperCase()} (${stumble.durationSeconds}s duration)\n`;
-      md += `- **Sentence Context:** "${stumble.sentenceText}"\n`;
-      md += `- **Resolution:** ${stumble.resolvedWithReRead ? 'Resolved with smooth full-sentence re-read' : 'Flagged for follow-up'}\n\n`;
+    session.stumbles.forEach((stumble, index) => {
+      markdown += `### ${index + 1}. Word: **${stumble.targetWord || 'Sentence Stumble'}**\n`;
+      markdown += `- **Issue Type:** ${stumble.stumbleType.replace('_', ' ').toUpperCase()} (${stumble.durationSeconds}s duration)\n`;
+      markdown += `- **Sentence Context:** "${stumble.sentenceText}"\n`;
+      markdown += `- **Resolution:** ${stumble.resolvedWithReRead ? 'Resolved with smooth full-sentence re-read' : 'Flagged for follow-up'}\n\n`;
     });
   }
 
-  md += `## 2. Syntax & Sentence Structure Observations\n`;
-  if (session.parentInsights.syntaxNotes.length > 0) {
-    session.parentInsights.syntaxNotes.forEach((note) => {
-      md += `- ${note}\n`;
-    });
+  markdown += `## 2. Syntax & Sentence Structure Observations\n`;
+  session.parentInsights.syntaxNotes.forEach((note) => {
+    markdown += `- ${note}\n`;
+  });
+  markdown += `\n## 3. Two-Way Tactical Debrief & Comprehension Notes\n`;
+  if (session.debriefTurns.length === 0) {
+    markdown += `*Passage read aloud; debrief stage logged.*\n\n`;
   } else {
-    md += `- Handled compound and complex sentence transitions smoothly.\n`;
-  }
-  md += `\n`;
-
-  md += `## 3. Two-Way Tactical Debrief & Comprehension Notes\n`;
-  if (session.debriefTurns.length > 0) {
-    session.debriefTurns.forEach((turn, idx) => {
-      md += `**Exchange ${idx + 1} (${turn.category}):**\n`;
-      md += `*Prompt:* "${turn.question}"\n\n`;
-      md += `*Mikaela's Insight:* "${turn.studentResponse}"\n\n`;
-      md += `*Mentor Reflection:* ${turn.mentorFeedback}\n\n`;
+    session.debriefTurns.forEach((turn, index) => {
+      markdown += `**Exchange ${index + 1} (${turn.category}):**\n`;
+      markdown += `*Prompt:* "${turn.question}"\n\n`;
+      markdown += `*Mikaela's Insight:* "${turn.studentResponse}"\n\n`;
+      markdown += `*Mentor Reflection:* ${turn.mentorFeedback}\n\n`;
     });
-  } else {
-    md += `*Passage read aloud; debrief stage logged.*\n\n`;
   }
 
-  md += `## 4. Dinner-Table & Car-Ride Coaching Sparks for Dad\n`;
-  md += `> ${session.parentInsights.dinnerTablePrompt}\n\n`;
-  md += `**Tactical Concept Takeaway:** ${session.parentInsights.tacticalTakeaway}\n`;
-
-  return md;
+  markdown += `## 4. Dinner-Table & Car-Ride Coaching Sparks for Dad\n`;
+  markdown += `> ${session.parentInsights.dinnerTablePrompt}\n\n`;
+  markdown += `**Tactical Concept Takeaway:** ${session.parentInsights.tacticalTakeaway}\n`;
+  return markdown;
 }

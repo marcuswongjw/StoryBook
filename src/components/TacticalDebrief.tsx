@@ -385,7 +385,7 @@ export const TacticalDebrief: React.FC<TacticalDebriefProps> = ({
               className="w-full sm:w-auto py-3 px-8 rounded-xl bg-gradient-to-r from-compass-teal to-ocean-500 hover:from-compass-glow hover:to-ocean-400 text-compass-dark font-extrabold text-sm shadow-xl shadow-compass-teal/20 transition-all flex items-center justify-center gap-2"
             >
               <ShieldCheck className="w-4 h-4" />
-              <span>View Parent Diagnostic Telemetry →</span>
+              <span>Choose Another Story →</span>
             </button>
           </div>
         </div>

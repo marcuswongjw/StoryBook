@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SessionTelemetry } from '../types';
-import { generateParentMarkdownReport, loadSessions, updateOrAddTelemetrySession, deleteSession } from '../services/storage';
+import { generateParentMarkdownReport, loadSessions, loadRemoteSessions, updateOrAddTelemetrySession, deleteSession } from '../services/storage';
 import { INITIAL_PASSAGES } from '../data/passages';
 import {
   ShieldCheck,
@@ -21,34 +21,28 @@ import {
   Trash2
 } from 'lucide-react';
 
-interface ParentDashboardProps {
-  sessions?: SessionTelemetry[];
-  onBackToReader: () => void;
-}
-
-export const ParentDashboard: React.FC<ParentDashboardProps> = ({
-  onBackToReader,
-}) => {
-  const [sessions, setSessions] = useState<SessionTelemetry[]>(loadSessions());
+export const ParentDashboard: React.FC = () => {
+  const [sessions, setSessions] = useState<SessionTelemetry[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Sync fresh sessions from storage on mount
-  useEffect(() => {
-    const fresh = loadSessions();
-    setSessions(fresh);
-    if (fresh.length > 0 && !selectedSessionId) {
-      setSelectedSessionId(fresh[0].sessionId);
-    }
-  }, []);
-
-  const refreshTelemetry = () => {
-    const fresh = loadSessions();
+  const refreshTelemetry = async () => {
+    const fresh = await loadRemoteSessions();
     setSessions(fresh);
     if (fresh.length > 0) {
-      setSelectedSessionId((prev) => (prev && fresh.some(s => s.sessionId === prev) ? prev : fresh[0].sessionId));
+      setSelectedSessionId((previous) => (
+        previous && fresh.some((session) => session.sessionId === previous)
+          ? previous
+          : fresh[0].sessionId
+      ));
+    } else {
+      setSelectedSessionId(null);
     }
   };
+
+  useEffect(() => {
+    void refreshTelemetry();
+  }, []);
 
   const handleDeleteSession = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -168,7 +162,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={refreshTelemetry}
+            onClick={() => void refreshTelemetry()}
             className="px-3 py-2 rounded-xl bg-compass-dark hover:bg-compass-slate/40 text-slate-300 border border-compass-slate/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
             title="Reload latest sessions from storage"
           >
@@ -176,13 +170,13 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             <span>Refresh Log</span>
           </button>
 
-          <button
-            onClick={onBackToReader}
+          <a
+            href="https://story.marcusw.xyz"
             className="px-4 py-2 rounded-xl bg-compass-teal hover:bg-compass-glow text-compass-dark font-bold text-xs sm:text-sm shadow-md transition-all flex items-center gap-2"
           >
             <BookOpen className="w-4 h-4" />
-            <span>Return to Reading Deck</span>
-          </button>
+            <span>Open Reading Deck</span>
+          </a>
         </div>
       </div>
 
@@ -241,12 +235,12 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-            <button
-              onClick={onBackToReader}
+            <a
+              href="https://story.marcusw.xyz"
               className="px-6 py-3 rounded-xl bg-compass-teal text-compass-dark font-bold text-sm shadow-lg shadow-compass-teal/20"
             >
-              Start Reading on Deck
-            </button>
+              Open Reading Deck
+            </a>
             <button
               onClick={handleCreateSampleSession}
               className="px-5 py-3 rounded-xl bg-compass-dark hover:bg-compass-slate/40 text-compass-glow border border-compass-teal/40 font-semibold text-sm transition-all"
