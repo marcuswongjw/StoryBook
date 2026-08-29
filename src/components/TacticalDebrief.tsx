@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Passage, DebriefPrompt, DebriefTurn, ReadingStumble, SessionTelemetry, TutorSettings } from '../types';
 import { mentorVoice } from '../services/speechSynthesis';
 import { soundEngine } from '../services/soundEffects';
 import { voiceListener, SpeechRecognitionResultPayload } from '../services/speechRecognition';
-import { saveSession } from '../services/storage';
+import { saveSession, updateOrAddTelemetrySession } from '../services/storage';
 import { AudioWaveform } from './AudioWaveform';
 import {
   Compass,
@@ -41,6 +41,7 @@ export const TacticalDebrief: React.FC<TacticalDebriefProps> = ({
   const [isMentorSpeaking, setIsMentorSpeaking] = useState(false);
   const [completedTurns, setCompletedTurns] = useState<DebriefTurn[]>([]);
   const [isDebriefFinished, setIsDebriefFinished] = useState(false);
+  const sessionIdRef = useRef<string>('session-' + Date.now());
 
   const currentPrompt: DebriefPrompt = passage.debriefPrompts[currentPromptIndex];
 
@@ -49,7 +50,18 @@ export const TacticalDebrief: React.FC<TacticalDebriefProps> = ({
   const stumblePenalty = Math.min(40, stumbles.length * 8);
   const smoothnessScore = Math.max(60, 100 - stumblePenalty);
 
+  // Auto-save on debrief entry
   useEffect(() => {
+    updateOrAddTelemetrySession(
+      sessionIdRef.current,
+      passage,
+      durationSeconds,
+      totalWords,
+      stumbles,
+      completedTurns,
+      false
+    );
+
     soundEngine.playShipsBell();
     if (currentPrompt) {
       speakMentorPrompt(currentPrompt);
@@ -123,6 +135,17 @@ export const TacticalDebrief: React.FC<TacticalDebriefProps> = ({
     setCompletedTurns(updatedTurns);
     setStudentInput('');
 
+    // Persist turn immediately
+    updateOrAddTelemetrySession(
+      sessionIdRef.current,
+      passage,
+      durationSeconds,
+      totalWords,
+      stumbles,
+      updatedTurns,
+      currentPromptIndex + 1 >= passage.debriefPrompts.length
+    );
+
     setIsMentorSpeaking(true);
     soundEngine.playSuccessChime();
     mentorVoice.speak(mentorFeedback, {
@@ -149,64 +172,29 @@ export const TacticalDebrief: React.FC<TacticalDebriefProps> = ({
       colors: ['#5BC0BE', '#6FFFE9', '#fbbf24', '#0ea5e9', '#10b981'],
     });
 
-    const vocabBottlenecks = stumbles
-      .filter((s) => s.targetWord)
-      .map((s) => ({
-        word: s.targetWord!,
-        count: 1,
-        sentence: s.sentenceText,
-      }));
-
-    const session: SessionTelemetry = {
-      sessionId: 'session-' + Date.now(),
-      timestamp: Date.now(),
-      passageId: passage.id,
-      passageTitle: passage.title,
-      passageCategory: passage.category,
+    const session = updateOrAddTelemetrySession(
+      sessionIdRef.current,
+      passage,
       durationSeconds,
-      wordsRead: totalWords,
-      effectiveWpm,
-      smoothnessScore,
+      totalWords,
       stumbles,
-      debriefTurns: finalTurns,
-      parentInsights: {
-        bottleneckVocab: vocabBottlenecks,
-        syntaxNotes: stumbles.map((s) => `Hurdle with: "${s.sentenceText.slice(0, 50)}..."`),
-        dinnerTablePrompt: `Ask Mikaela: "If you were skippering Elena's yacht rounding Cape Horn, how would you have communicated with the crew when the barometer plummeted?"`,
-        tacticalTakeaway: `Mikaela demonstrated sharp comprehension of momentum management and tactical navigation. Reinforce "${vocabBottlenecks.map((v) => v.word).join(', ') || 'advanced nautical phrasing'}" during casual conversation.`,
-      },
-    };
+      finalTurns,
+      true
+    );
 
     saveSession(session);
   };
 
   const handleWrapUp = () => {
-    const finalSession: SessionTelemetry = {
-      sessionId: 'session-' + Date.now(),
-      timestamp: Date.now(),
-      passageId: passage.id,
-      passageTitle: passage.title,
-      passageCategory: passage.category,
+    const finalSession = updateOrAddTelemetrySession(
+      sessionIdRef.current,
+      passage,
       durationSeconds,
-      wordsRead: totalWords,
-      effectiveWpm,
-      smoothnessScore,
+      totalWords,
       stumbles,
-      debriefTurns: completedTurns,
-      parentInsights: {
-        bottleneckVocab: stumbles.filter((s) => s.targetWord).map((s) => ({
-          word: s.targetWord!,
-          count: 1,
-          sentence: s.sentenceText,
-        })),
-        syntaxNotes: [
-          'Compound-complex maritime sentence structures navigated smoothly.',
-        ],
-        dinnerTablePrompt: `Ask Mikaela: "What was the most intense tactical decision in tonight's story, and why did it work?"`,
-        tacticalTakeaway: `Elevated comprehension and vocabulary retention achieved without worksheets.`,
-      },
-    };
-    saveSession(finalSession);
+      completedTurns,
+      true
+    );
     onFinishDebrief(finalSession);
   };
 

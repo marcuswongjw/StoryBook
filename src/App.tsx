@@ -21,7 +21,6 @@ export const App: React.FC = () => {
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
 
-  // Completed reading session state passed to debrief
   const [readingSessionData, setReadingSessionData] = useState<{
     stumbles: ReadingStumble[];
     durationSeconds: number;
@@ -32,7 +31,6 @@ export const App: React.FC = () => {
     setPassages(loadPassages());
     setSessions(loadSessions());
 
-    // Start ambient background on initial interaction if enabled
     if (settings.ambientSound !== 'none') {
       soundEngine.startAmbient(settings.ambientSound, settings.ambientVolume);
     }
@@ -59,6 +57,7 @@ export const App: React.FC = () => {
     setCurrentPassage(null);
     setSessionStartTime(null);
     setReadingSessionData(null);
+    setSessions(loadSessions());
   };
 
   const handleCompletePassage = (
@@ -70,8 +69,8 @@ export const App: React.FC = () => {
     setFlowState('debrief');
   };
 
-  const handleFinishDebrief = (session: SessionTelemetry) => {
-    setSessions((prev) => [session, ...prev.filter((s) => s.sessionId !== session.sessionId)]);
+  const handleFinishDebrief = (_session: SessionTelemetry) => {
+    setSessions(loadSessions());
     setActiveTab('parent');
     setFlowState('catalog');
     setCurrentPassage(null);
@@ -106,7 +105,10 @@ export const App: React.FC = () => {
         {activeTab === 'parent' ? (
           <ParentDashboard
             sessions={sessions}
-            onBackToReader={() => setActiveTab('reader')}
+            onBackToReader={() => {
+              setSessions(loadSessions());
+              setActiveTab('reader');
+            }}
           />
         ) : (
           <>

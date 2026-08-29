@@ -4,6 +4,7 @@ import { voiceListener, SpeechRecognitionResultPayload, SpeechStatus } from '../
 import { mentorVoice } from '../services/speechSynthesis';
 import { soundEngine } from '../services/soundEffects';
 import { SentenceFluencyTracker } from '../services/fluencyAnalyzer';
+import { updateOrAddTelemetrySession } from '../services/storage';
 import { AudioWaveform } from './AudioWaveform';
 import { UnpackModal } from './UnpackModal';
 import {
@@ -40,6 +41,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
 
   const [allStumbles, setAllStumbles] = useState<ReadingStumble[]>([]);
   const sessionStartTimeRef = useRef<number>(Date.now());
+  const sessionIdRef = useRef<string>('session-' + Date.now());
   const trackerRef = useRef<SentenceFluencyTracker | null>(null);
 
   const currentSentence: SentenceData = passage.sentences[currentSentenceIndex];
@@ -50,8 +52,33 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
     0
   );
 
+  // Helper to persist current telemetry live to storage
+  const syncCurrentTelemetry = (stumblesList: ReadingStumble[], isCompleted = false) => {
+    const elapsed = Math.max(1, Math.round((Date.now() - sessionStartTimeRef.current) / 1000));
+    // Calculate cumulative words read so far
+    let readWordsCount = 0;
+    for (let i = 0; i < currentSentenceIndex; i++) {
+      readWordsCount += passage.sentences[i].text.split(/\s+/).length;
+    }
+    readWordsCount += activeWordIndex;
+
+    updateOrAddTelemetrySession(
+      sessionIdRef.current,
+      passage,
+      elapsed,
+      readWordsCount,
+      stumblesList,
+      [],
+      isCompleted
+    );
+  };
+
+  // Setup tracker for current sentence
   useEffect(() => {
     if (!currentSentence) return;
+
+    // Save initial reading session on start/sentence change
+    syncCurrentTelemetry(allStumbles, false);
 
     setActiveWordIndex(0);
     const tracker = new SentenceFluencyTracker(
@@ -60,7 +87,11 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
     );
 
     tracker.setHesitationCallback((vocab, stumble) => {
-      setAllStumbles((prev) => [...prev, stumble]);
+      setAllStumbles((prev) => {
+        const updated = [...prev, stumble];
+        syncCurrentTelemetry(updated, false);
+        return updated;
+      });
       setActiveStumble({ vocab, stumble });
     });
 
@@ -92,6 +123,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
 
   const handleSentenceComplete = () => {
     soundEngine.playSuccessChime();
+    syncCurrentTelemetry(allStumbles, false);
 
     if (currentSentenceIndex + 1 < passage.sentences.length) {
       setTimeout(() => {
@@ -107,9 +139,11 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
       });
 
       const totalDuration = Math.max(1, Math.round((Date.now() - sessionStartTimeRef.current) / 1000));
+      syncCurrentTelemetry(allStumbles, true);
+
       setTimeout(() => {
         onCompletePassage(allStumbles, totalDuration, totalPassageWords);
-      }, 1000);
+      }, 800);
     }
   };
 
@@ -144,9 +178,10 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
 
   const handleStumbleResolved = (resolvedStumble: ReadingStumble) => {
     setActiveStumble(null);
-    setAllStumbles((prev) =>
-      prev.map((s) => (s.id === resolvedStumble.id ? resolvedStumble : s))
-    );
+    const updated = allStumbles.map((s) => (s.id === resolvedStumble.id ? resolvedStumble : s));
+    setAllStumbles(updated);
+    syncCurrentTelemetry(updated, false);
+
     if (trackerRef.current) {
       trackerRef.current.reset();
     }
@@ -168,6 +203,11 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
     }
   };
 
+  const handleSafeExit = () => {
+    syncCurrentTelemetry(allStumbles, false);
+    onExit();
+  };
+
   const progressPercentage = Math.round(
     ((currentSentenceIndex + 1) / passage.sentences.length) * 100
   );
@@ -177,7 +217,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
       {/* Top Reading Header */}
       <div className="flex items-center justify-between gap-4 border-b border-compass-slate/40 pb-4">
         <button
-          onClick={onExit}
+          onClick={handleSafeExit}
           className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-slate-400 hover:text-slate-200 transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -186,7 +226,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
 
         <div className="text-center">
           <div className="text-xs font-mono text-compass-teal uppercase tracking-wider">
-            {passage.category} Expedition • {passage.lexileLevel}
+            {passage.category === 'singapore' ? '🇸🇬 Singapore' : passage.category} Expedition • {passage.lexileLevel}
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white font-sans">
             {passage.title}
@@ -337,7 +377,7 @@ export const ReadingRoom: React.FC<ReadingRoomProps> = ({
                   : 'Speech Paused'}
               </span>
               <span className="text-[10px] text-slate-400">
-                (Auto-detects hesitations on vocab)
+                (Auto-logs to Parent Hub in real time)
               </span>
             </div>
             <AudioWaveform

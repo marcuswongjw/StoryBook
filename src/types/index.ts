@@ -81,6 +81,7 @@ export interface SessionTelemetry {
   smoothnessScore: number; // 0 - 100
   stumbles: ReadingStumble[];
   debriefTurns: DebriefTurn[];
+  status?: 'in_progress' | 'completed';
   parentInsights: {
     bottleneckVocab: Array<{ word: string; count: number; sentence: string }>;
     syntaxNotes: string[];

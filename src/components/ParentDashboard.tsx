@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SessionTelemetry } from '../types';
-import { generateParentMarkdownReport } from '../services/storage';
+import { generateParentMarkdownReport, loadSessions, updateOrAddTelemetrySession, deleteSession } from '../services/storage';
+import { INITIAL_PASSAGES } from '../data/passages';
 import {
   ShieldCheck,
   TrendingUp,
@@ -15,22 +16,97 @@ import {
   Sparkles,
   BookOpen,
   MessageSquare,
-  Anchor
+  Anchor,
+  RotateCw,
+  Trash2
 } from 'lucide-react';
 
 interface ParentDashboardProps {
-  sessions: SessionTelemetry[];
+  sessions?: SessionTelemetry[];
   onBackToReader: () => void;
 }
 
 export const ParentDashboard: React.FC<ParentDashboardProps> = ({
-  sessions,
   onBackToReader,
 }) => {
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
-    sessions[0]?.sessionId || null
-  );
+  const [sessions, setSessions] = useState<SessionTelemetry[]>(loadSessions());
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Sync fresh sessions from storage on mount
+  useEffect(() => {
+    const fresh = loadSessions();
+    setSessions(fresh);
+    if (fresh.length > 0 && !selectedSessionId) {
+      setSelectedSessionId(fresh[0].sessionId);
+    }
+  }, []);
+
+  const refreshTelemetry = () => {
+    const fresh = loadSessions();
+    setSessions(fresh);
+    if (fresh.length > 0) {
+      setSelectedSessionId((prev) => (prev && fresh.some(s => s.sessionId === prev) ? prev : fresh[0].sessionId));
+    }
+  };
+
+  const handleDeleteSession = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    deleteSession(id);
+    const fresh = loadSessions();
+    setSessions(fresh);
+    if (selectedSessionId === id) {
+      setSelectedSessionId(fresh[0]?.sessionId || null);
+    }
+  };
+
+  const handleCreateSampleSession = () => {
+    const samplePassage = INITIAL_PASSAGES[0];
+    const sample = updateOrAddTelemetrySession(
+      'sample-' + Date.now(),
+      samplePassage,
+      320,
+      142,
+      [
+        {
+          id: 'st-sample-1',
+          timestamp: Date.now() - 100000,
+          sentenceId: 'sq-2',
+          sentenceText: 'Mikaela leaned her entire body out over the windward gunwale to keep the small dinghy flat and fast.',
+          targetWord: 'gunwale',
+          stumbleType: 'hesitation',
+          durationSeconds: 4.2,
+          resolvedWithReRead: true,
+        },
+        {
+          id: 'st-sample-2',
+          timestamp: Date.now() - 60000,
+          sentenceId: 'sq-5',
+          sentenceText: '“Ready about!” she yelled to her crewmate, carving the bow through the wind in a crisp, sharp tack.',
+          targetWord: 'tack',
+          stumbleType: 'mispronunciation',
+          durationSeconds: 3.1,
+          resolvedWithReRead: true,
+        }
+      ],
+      [
+        {
+          id: 'turn-sample-1',
+          promptId: 'sq-debrief-1',
+          category: 'Tactical Regatta Decision',
+          question: 'Why is hiking out hard over the gunwale much safer than easing the sail and letting the boat slow down in a Sumatra squall?',
+          studentResponse: 'Because if you slow down you lose rudder control and the waves can flip you over sideways.',
+          mentorFeedback: 'Outstanding tactical analysis, Mikaela! By holding forward momentum, you keep water flowing over the centerboard and rudder.',
+          timestamp: Date.now() - 30000,
+        }
+      ],
+      true
+    );
+
+    const fresh = loadSessions();
+    setSessions(fresh);
+    setSelectedSessionId(sample.sessionId);
+  };
 
   const selectedSession = sessions.find((s) => s.sessionId === selectedSessionId) || sessions[0];
 
@@ -90,7 +166,16 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={refreshTelemetry}
+            className="px-3 py-2 rounded-xl bg-compass-dark hover:bg-compass-slate/40 text-slate-300 border border-compass-slate/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
+            title="Reload latest sessions from storage"
+          >
+            <RotateCw className="w-3.5 h-3.5 text-compass-teal" />
+            <span>Refresh Log</span>
+          </button>
+
           <button
             onClick={onBackToReader}
             className="px-4 py-2 rounded-xl bg-compass-teal hover:bg-compass-glow text-compass-dark font-bold text-xs sm:text-sm shadow-md transition-all flex items-center gap-2"
@@ -109,7 +194,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             Total Sessions
           </div>
           <div className="text-3xl font-black text-white font-sans">{totalSessions}</div>
-          <div className="text-[11px] text-slate-400">20-min evening sessions logged</div>
+          <div className="text-[11px] text-slate-400">Recorded reading sessions</div>
         </div>
 
         <div className="bg-compass-navy/80 border border-compass-slate/40 rounded-2xl p-5 space-y-1 shadow-lg">
@@ -145,20 +230,30 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       </div>
 
       {sessions.length === 0 ? (
-        <div className="bg-compass-navy/60 border border-dashed border-compass-slate/50 rounded-3xl p-12 text-center space-y-4">
+        <div className="bg-compass-navy/60 border border-dashed border-compass-slate/50 rounded-3xl p-10 text-center space-y-5">
           <div className="w-16 h-16 rounded-2xl bg-compass-slate/30 flex items-center justify-center text-slate-400 mx-auto">
-            <FileText className="w-8 h-8" />
+            <FileText className="w-8 h-8 text-compass-teal" />
           </div>
-          <h3 className="text-xl font-bold text-white font-sans">No Reading Sessions Logged Yet</h3>
-          <p className="text-slate-400 text-sm max-w-md mx-auto">
-            Have Mikaela start her first adventure story on the Reading Deck. As she reads aloud, real-time vocabulary bottlenecks and debrief exchanges will automatically populate here.
-          </p>
-          <button
-            onClick={onBackToReader}
-            className="px-6 py-3 rounded-xl bg-compass-teal text-compass-dark font-bold text-sm"
-          >
-            Launch First Story
-          </button>
+          <div className="space-y-1">
+            <h3 className="text-xl font-bold text-white font-sans">No Reading Sessions Recorded Yet</h3>
+            <p className="text-slate-400 text-sm max-w-md mx-auto">
+              As soon as Mikaela reads a passage on the Reading Deck, every word read, hesitation, unpacked stumble, and debrief response will automatically appear here in real time.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              onClick={onBackToReader}
+              className="px-6 py-3 rounded-xl bg-compass-teal text-compass-dark font-bold text-sm shadow-lg shadow-compass-teal/20"
+            >
+              Start Reading on Deck
+            </button>
+            <button
+              onClick={handleCreateSampleSession}
+              className="px-5 py-3 rounded-xl bg-compass-dark hover:bg-compass-slate/40 text-compass-glow border border-compass-teal/40 font-semibold text-sm transition-all"
+            >
+              + Generate Sample Diagnostic Report
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -169,14 +264,16 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 <Clock className="w-4 h-4 text-compass-teal" />
                 <span>Logged Sessions ({sessions.length})</span>
               </h3>
-              <button
-                onClick={handleDownloadJson}
-                className="text-xs text-slate-400 hover:text-compass-teal font-mono flex items-center gap-1"
-                title="Download complete telemetry JSON"
-              >
-                <Download className="w-3 h-3" />
-                <span>Export JSON</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDownloadJson}
+                  className="text-xs text-slate-400 hover:text-compass-teal font-mono flex items-center gap-1"
+                  title="Download complete telemetry JSON"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>JSON</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
@@ -193,7 +290,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                   <div
                     key={session.sessionId}
                     onClick={() => setSelectedSessionId(session.sessionId)}
-                    className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-2 ${
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer space-y-2 relative group ${
                       isSelected
                         ? 'bg-compass-navy border-compass-teal shadow-lg shadow-compass-teal/10 ring-1 ring-compass-teal'
                         : 'bg-compass-dark/70 border-compass-slate/40 hover:bg-compass-navy/60'
@@ -201,9 +298,24 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                   >
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-mono text-slate-400">{date}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-compass-slate/40 text-compass-glow">
-                        {session.passageCategory}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            session.status === 'completed'
+                              ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-compass-slate/40 text-compass-glow'
+                          }`}
+                        >
+                          {session.status === 'completed' ? 'Completed' : 'Logged'}
+                        </span>
+                        <button
+                          onClick={(e) => handleDeleteSession(session.sessionId, e)}
+                          className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 p-1 transition-opacity"
+                          title="Delete this session record"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="text-sm font-bold text-white font-sans line-clamp-1">
@@ -228,9 +340,14 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               <div className="bg-compass-navy border border-compass-teal/30 rounded-3xl p-6 space-y-4 shadow-xl">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-compass-slate/40 pb-4">
                   <div>
-                    <span className="text-xs font-mono text-compass-teal uppercase tracking-wider">
-                      {selectedSession.passageCategory} Expedition Log
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-compass-teal uppercase tracking-wider">
+                        {selectedSession.passageCategory === 'singapore' ? '🇸🇬 Singapore' : selectedSession.passageCategory} Expedition Log
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        {selectedSession.status === 'completed' ? 'Completed' : 'Live Recorded'}
+                      </span>
+                    </div>
                     <h3 className="text-2xl font-bold text-white font-sans mt-0.5">
                       {selectedSession.passageTitle}
                     </h3>
@@ -265,7 +382,13 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 </div>
 
                 {/* Session Diagnostic Snapshot */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-compass-dark/70 rounded-xl p-3 border border-compass-slate/40 text-center">
+                    <div className="text-[11px] text-slate-400">Words Read</div>
+                    <div className="text-lg font-bold text-white font-mono mt-0.5">
+                      {selectedSession.wordsRead}
+                    </div>
+                  </div>
                   <div className="bg-compass-dark/70 rounded-xl p-3 border border-compass-slate/40 text-center">
                     <div className="text-[11px] text-slate-400">Pacing Speed</div>
                     <div className="text-lg font-bold text-compass-glow font-mono mt-0.5">
@@ -281,7 +404,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                   <div className="bg-compass-dark/70 rounded-xl p-3 border border-compass-slate/40 text-center">
                     <div className="text-[11px] text-slate-400">Duration</div>
                     <div className="text-lg font-bold text-slate-200 font-mono mt-0.5">
-                      {Math.round(selectedSession.durationSeconds / 60)} min
+                      {Math.max(1, Math.round(selectedSession.durationSeconds / 60))} min
                     </div>
                   </div>
                 </div>
@@ -296,7 +419,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
                 {selectedSession.stumbles.length === 0 ? (
                   <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-emerald-300 text-xs sm:text-sm">
-                    ✨ Flawless reading delivery! Mikaela smoothly navigated every tier-2/tier-3 word in this passage without hesitations.
+                    ✨ Flawless reading delivery! Mikaela smoothly navigated every vocabulary word in this passage without hesitations.
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -325,7 +448,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
                         <div className="text-[11px] text-emerald-400 font-medium flex items-center gap-1.5">
                           <Check className="w-3.5 h-3.5" />
-                          <span>{stumble.resolvedWithReRead ? 'Resolved with smooth full-sentence re-read' : 'Flagged for reinforcement'}</span>
+                          <span>{stumble.resolvedWithReRead ? 'Resolved with smooth full-sentence re-read' : 'Logged for follow-up'}</span>
                         </div>
                       </div>
                     ))}
@@ -371,7 +494,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 </h4>
 
                 {selectedSession.debriefTurns.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No debrief exchanges recorded.</p>
+                  <p className="text-xs text-slate-400 italic">No debrief exchanges recorded yet for this session.</p>
                 ) : (
                   <div className="space-y-4">
                     {selectedSession.debriefTurns.map((turn, idx) => (

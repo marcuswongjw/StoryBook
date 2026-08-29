@@ -1,4 +1,4 @@
-import { SessionTelemetry, Passage, TutorSettings } from '../types';
+import { SessionTelemetry, Passage, TutorSettings, ReadingStumble, DebriefTurn } from '../types';
 import { INITIAL_PASSAGES } from '../data/passages';
 
 const SESSIONS_KEY = 'storybook_sessions_v1';
@@ -13,14 +13,15 @@ export const DEFAULT_SETTINGS: TutorSettings = {
   ambientSound: 'ocean',
   sessionTargetMinutes: 20,
   theme: 'nautical',
-  hesitationThresholdSeconds: 3.8,
+  hesitationThresholdSeconds: 4.0,
 };
 
 export function loadSessions(): SessionTelemetry[] {
   try {
     const raw = localStorage.getItem(SESSIONS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed: SessionTelemetry[] = JSON.parse(raw);
+    return parsed.sort((a, b) => b.timestamp - a.timestamp);
   } catch (e) {
     console.error('Failed to load sessions from storage:', e);
     return [];
@@ -30,11 +31,73 @@ export function loadSessions(): SessionTelemetry[] {
 export function saveSession(session: SessionTelemetry): void {
   try {
     const existing = loadSessions();
-    const updated = [session, ...existing.filter((s) => s.sessionId !== session.sessionId)];
+    const filtered = existing.filter((s) => s.sessionId !== session.sessionId);
+    const updated = [session, ...filtered];
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated));
   } catch (e) {
     console.error('Failed to save session:', e);
   }
+}
+
+export function deleteSession(sessionId: string): void {
+  try {
+    const existing = loadSessions();
+    const updated = existing.filter((s) => s.sessionId !== sessionId);
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to delete session:', e);
+  }
+}
+
+export function updateOrAddTelemetrySession(
+  sessionId: string,
+  passage: Passage,
+  durationSeconds: number,
+  wordsRead: number,
+  stumbles: ReadingStumble[],
+  debriefTurns: DebriefTurn[] = [],
+  isCompleted = false
+): SessionTelemetry {
+  const minutes = Math.max(0.1, durationSeconds / 60);
+  const effectiveWpm = Math.round(wordsRead / minutes);
+  const stumblePenalty = Math.min(40, stumbles.length * 7);
+  const smoothnessScore = Math.max(60, 100 - stumblePenalty);
+
+  const vocabBottlenecks = stumbles
+    .filter((s) => s.targetWord)
+    .map((s) => ({
+      word: s.targetWord!,
+      count: 1,
+      sentence: s.sentenceText,
+    }));
+
+  const syntaxNotes = stumbles.length > 0
+    ? stumbles.map((s) => `Decoded phrase hurdle: "${s.sentenceText.slice(0, 48)}..."`)
+    : ['Navigated nautical transitions and compound sentences with smooth flow.'];
+
+  const session: SessionTelemetry = {
+    sessionId,
+    timestamp: Date.now(),
+    passageId: passage.id,
+    passageTitle: passage.title,
+    passageCategory: passage.category,
+    durationSeconds,
+    wordsRead,
+    effectiveWpm,
+    smoothnessScore,
+    stumbles,
+    debriefTurns,
+    status: isCompleted ? 'completed' : 'in_progress',
+    parentInsights: {
+      bottleneckVocab: vocabBottlenecks,
+      syntaxNotes,
+      dinnerTablePrompt: `Ask Mikaela: "What was the most challenging tactical decision in '${passage.title}' and how did the skipper handle it?"`,
+      tacticalTakeaway: `Reinforce vocabulary like "${vocabBottlenecks.map((v) => v.word).join(', ') || 'nautical flow'}" during casual conversation.`,
+    },
+  };
+
+  saveSession(session);
+  return session;
 }
 
 export function loadPassages(): Passage[] {
@@ -92,7 +155,7 @@ export function generateParentMarkdownReport(session: SessionTelemetry): string 
   let md = `# Mikaela's Tactical Reading Diagnostic Report\n\n`;
   md += `**Session Date:** ${dateStr}\n`;
   md += `**Passage Title:** ${session.passageTitle} (${session.passageCategory.toUpperCase()})\n`;
-  md += `**Session Duration:** ${durationMin} minutes | **Words Read:** ${session.wordsRead} | **Effective WPM:** ${session.effectiveWpm} | **Fluency Score:** ${session.smoothnessScore}%\n\n`;
+  md += `**Status:** ${session.status === 'completed' ? 'Mission Completed' : 'Session Logged'} | **Session Duration:** ${durationMin} min | **Words Read:** ${session.wordsRead} | **Effective WPM:** ${session.effectiveWpm} | **Fluency Score:** ${session.smoothnessScore}%\n\n`;
 
   md += `## 1. Vocabulary Bottlenecks & Interventions\n`;
   if (session.stumbles.length === 0) {
@@ -106,7 +169,7 @@ export function generateParentMarkdownReport(session: SessionTelemetry): string 
     });
   }
 
-  md += `## 2. Syntax & Complex Sentence Observations\n`;
+  md += `## 2. Syntax & Sentence Structure Observations\n`;
   if (session.parentInsights.syntaxNotes.length > 0) {
     session.parentInsights.syntaxNotes.forEach((note) => {
       md += `- ${note}\n`;
@@ -125,7 +188,7 @@ export function generateParentMarkdownReport(session: SessionTelemetry): string 
       md += `*Mentor Reflection:* ${turn.mentorFeedback}\n\n`;
     });
   } else {
-    md += `*Session completed without formal debrief logging.*\n\n`;
+    md += `*Passage read aloud; debrief stage logged.*\n\n`;
   }
 
   md += `## 4. Dinner-Table & Car-Ride Coaching Sparks for Dad\n`;
